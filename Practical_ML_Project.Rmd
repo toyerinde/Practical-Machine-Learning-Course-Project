@@ -1,0 +1,132 @@
+---
+title: "Practical Machine Learning Course Project"
+author: "Titi Oyerinde"
+date: "5/24/2022"
+output: html_document
+keep_md: true
+---
+
+## Executive Summary
+
+This is an R Markdown document on JHU Coursera Practical Machine Learning Course Project. The dataset used for this project is based on data collected from accelerometers on the belt, forearm, arm and dumbbell of 6 participants who performed barbell weight lifts exercise correctly and incorrectly in 5 different ways. The objective of this project is to predict the manner in which the participants did the exercise. A training and test dataset was provided to build a predictive model. To avoid use of the test dataset during the model training process, the training dataset was divided into training and validation datasets. 4 predictive models were built using the training dataset and predictive accuracy determined with the validation dataset. The model that resulted in the highest accuracy and kappa was then used to predict the 20 activities performed in the test dataset.
+
+## Data Wrangling
+The raw training and test dataset was loaded using the readr package. The str function revealed that the training dataset had 19622 obs and 160 variables and the testing dataset had 20 obs and 160 variables. Data wrangling (see code below) was done to get rid of columns with NAs and data irrelevant to the building of the models.
+
+```{r Loading data, echo=TRUE}
+#read both training and testing data
+library(readr)
+training_data<-read_csv("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv")
+testing_data<-read_csv("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv")
+str(training_data)
+str(testing_data)
+```
+
+```{r data wrangling, echo=TRUE}
+#Cleaning training and test datasets
+training_data$classe<-as.factor(training_data$classe)
+training_data_ss<-training_data[,colSums(is.na(training_data))==0]
+testing_data_ss<-testing_data[,colSums(is.na(testing_data))==0]
+training_data_ss_final<-training_data_ss[,6:60]
+testing_data_ss_final<-testing_data_ss[,6:59]
+```
+
+## Model Building and Selection
+The training dataset was partitioned into a training and validation dataset and 4 models (Lasso, Decision Tree,Random Forest and Boosting) were built and trained using 20 fold cross validation on the training datasets and then tested against the validation set to determine the most predictive model. All the predictors in the cleaned datasets were used because the LASSO model did not identify common irrelevant predictors across all classes. Below are the steps taken to pick the best model:
+
+```{r traindata_part, echo=TRUE}
+#Creating training and validation datasets from original training data
+library(caret)
+set.seed(2022)
+inTrain_RN<-createDataPartition(training_data_ss_final$classe,p=0.75,list=FALSE)
+training_data_ss_finalds<-training_data_ss_final[inTrain_RN,]
+validation_data<-training_data_ss_final[-inTrain_RN,]
+```
+
+```{r cross_valid, echo=TRUE}
+# Set cross validation specs for the training dataset
+ctrlspecs_tr<-trainControl(method="cv",number=20,savePredictions="all",classProbs = TRUE)
+```
+
+### LASSO Regression Model
+```{r lasso, echo=TRUE,cache=TRUE}
+library(glmnet)
+#Create vector of potential lambda values
+lambda_vector<-10^seq(5,-5,length=500)
+set.seed(2022)
+#LASSO regression model fitting
+modfit_lasso<-train(classe~.,data=training_data_ss_finalds,preProcess=c("center","scale"),method="glmnet",tuneGrid=expand.grid(alpha=1,lambda=lambda_vector),trControl=ctrlspecs_tr)
+## Predict using validation set
+predict_lasso<-predict(modfit_lasso,newdata=validation_data)
+## Determine LASSO model predictive accuracy
+model_lassoperf<-confusionMatrix(predict_lasso,validation_data$classe)
+model_lassoperf
+```
+
+### Prediction Tree Model
+```{r tree, echo=TRUE,cache=TRUE}
+set.seed(2022)
+modfit_tree<-train(classe~.,data=training_data_ss_finalds,preProcess=c("center","scale"),method="rpart",tuneLength=8,trControl=ctrlspecs_tr)
+library(rattle)
+fancyRpartPlot(modfit_tree$finalModel)
+## Predict using validation set
+predict_tree<-predict(modfit_tree,newdata=validation_data)
+## Determine Decision Tree predictive accuracy
+model_treeperf<-confusionMatrix(predict_tree,validation_data$classe)
+model_treeperf
+```
+
+### Random Forest Model
+```{r random, echo=TRUE,cache=TRUE}
+set.seed(2022)
+modfit_rf<-train(classe~.,data=training_data_ss_finalds,preProcess=c("center","scale"),method="rf",tuneLength=8,trControl=ctrlspecs_tr)
+## Predict using validation set
+predict_rf<-predict(modfit_rf,newdata=validation_data)
+## Determine Random Forest model predictive accuracy
+model_rfperf<-confusionMatrix(predict_rf,validation_data$classe)
+model_rfperf
+```
+
+### Boosting Model
+```{r boost, echo=TRUE,cache=TRUE}
+set.seed(2022)
+library(gbm)
+modfit_gbm<-train(classe~.,data=training_data_ss_finalds,preProcess=c("center","scale"),method="gbm",tuneLength=8,trControl=ctrlspecs_tr)
+## Predict using validation set
+predict_gbm<-predict(modfit_gbm,newdata=validation_data)
+## Determine GBM model predictive accuracy
+model_gbmperf<-confusionMatrix(predict_gbm,validation_data$classe)
+model_gbmperf
+```
+
+# Compare models predictive performance based on validation dataset
+```{r model_compare, echo=TRUE}
+comp_perf<-matrix(c(model_lassoperf$overall[[1]],model_lassoperf$overall[[2]],
+                    model_treeperf$overall[[1]],model_treeperf$overall[[2]],
+                    model_rfperf$overall[[1]],model_rfperf$overall[[2]],
+                    model_gbmperf$overall[[1]],model_gbmperf$overall[[2]]),ncol=2,byrow= TRUE)
+
+#Name the columns and rows of comparison matrix
+colnames(comp_perf)<-c("Accuracy","Kappa")
+rownames(comp_perf)<-c("LASSO","Prediction_Tree","Random Forest","GBM")
+comp_perf<-as.table(comp_perf)
+comp_perf
+```
+ One can see from the comparison table above that the GBM(Boosting) resulted in the highest accuracy and highest kappa, thus the GBM model is selected to be the best prediction model for this dataset and used to predict the activities of the participants in the test dataset.
+
+### Out of sample error
+Since this is a multi-classification problem,kappa will be used as our measure of error. Based on the table above the GBM kappa is **`r model_gbmperf$overall[[2]]`** and thus we will expect our out of sample kappa to be slightly less than this value and at most this value.
+ 
+ 
+ 
+## Test Dataset Prediction
+Below is the prediction using the GBM model and the test dataset
+
+```{r test_predict, echo=TRUE}
+set.seed(2022)
+# Predict the classe of 20 test data cases
+predict_gbm_test<-predict(modfit_gbm,newdata=testing_data_ss_final)
+predict_gbm_test
+```
+ 
+ 
